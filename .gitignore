@@ -1,0 +1,17 @@
+# private notes — never published
+notatki-prywatne.md
+ZADANIA.md
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
