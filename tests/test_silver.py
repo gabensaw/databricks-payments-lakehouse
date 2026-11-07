@@ -10,6 +10,7 @@ from payments_lakehouse.silver import (
     add_validation_reason,
     clean_text,
     parse_types,
+    resolve_duplicates,
 )
 
 # ---------- clean_text ----------
@@ -140,5 +141,83 @@ def test_de_decimal_point_is_parsed(spark):
 
 def test_pl_thousands_separator_is_not_supported(spark):
     row = parsed_for(spark, "PL", amount="1.234,56")
-    assert row["amount"] == None
+    assert row["amount"] is None
     assert row["raw_amount"] == "1.234,56"
+
+
+# ---------- resolve_duplicates ----------
+
+def dedup(spark, rows):
+    """rows: (txn_id, _source_file, validation_reason) -> sorted list of (_source_file, reject_reason)."""
+    df = spark.createDataFrame(rows, "txn_id STRING, _source_file STRING, validation_reason STRING")
+    result = resolve_duplicates(df).select("_source_file", "reject_reason").collect()
+    pairs = [(r["_source_file"], r["reject_reason"]) for r in result]
+
+    return sorted(pairs, key=lambda p: (p[0], p[1] or ""))  # sort by file name, then by reason (None last)
+
+
+def test_newest_version_wins_even_if_invalid(spark):
+    # Arrange: v1 is valid, the correction v2 is broken
+    rows = [
+        ("IE1", "transactions_IE_20261010_v1.csv", None),
+        ("IE1", "transactions_IE_20261010_v2.csv", "invalid_date"),
+    ]
+
+    # Act
+    result = dedup(spark, rows)
+
+    # Assert: v2 is kept (and rejected for its own reason), v1 is only a duplicate -> nothing reaches Silver
+    assert result == [
+        ("transactions_IE_20261010_v1.csv", "duplicate"),
+        ("transactions_IE_20261010_v2.csv", "invalid_date"),
+    ]
+
+
+def test_unique_transaction_keeps_its_validation_result(spark):
+    rows = [("PL1", "transactions_PL_20261008.csv", None)]
+
+    result = dedup(spark, rows)
+
+    assert result == [("transactions_PL_20261008.csv", None)]
+
+
+def test_v2_replaces_v1(spark):
+    rows = [
+        ("IE1", "transactions_IE_20261010_v1.csv", None),
+        ("IE1", "transactions_IE_20261010_v2.csv", None),
+    ]
+
+    result = dedup(spark, rows)
+
+    assert result == [
+        ("transactions_IE_20261010_v1.csv", "duplicate"),
+        ("transactions_IE_20261010_v2.csv", None),
+    ]
+
+
+def test_newer_file_date_wins(spark):
+    rows = [
+        ("DE1", "transactions_DE_20261008.csv", None),
+        ("DE1", "transactions_DE_20261009.csv", None),
+    ]
+
+    result = dedup(spark, rows)
+
+    assert result == [
+        ("transactions_DE_20261008.csv", "duplicate"),
+        ("transactions_DE_20261009.csv", None),
+    ]
+
+
+def test_exact_copy_in_same_file_is_kept_once(spark):
+    rows = [
+        ("PL1", "transactions_PL_20261008.csv", None),
+        ("PL1", "transactions_PL_20261008.csv", None),
+    ]
+
+    result = dedup(spark, rows)
+
+    assert result == [
+        ("transactions_PL_20261008.csv", None),
+        ("transactions_PL_20261008.csv", "duplicate"),
+    ]

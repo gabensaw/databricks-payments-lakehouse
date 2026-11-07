@@ -101,7 +101,7 @@ def resolve_duplicates(df: DataFrame) -> DataFrame:
     return (
         df.withColumns({
             "_version": F.regexp_extract("_source_file", r"_v(\d+)\.csv$", 1).try_cast("int"),
-            "_source_date": F.try_to_date(F.regexp_extract("_source_file", r"_(\d{8})", 1), F.lit("yyyyMMdd")),
+            "_source_date": F.try_to_timestamp(F.regexp_extract("_source_file", r"_(\d{8})", 1), F.lit("yyyyMMdd")),
         })
         .withColumn("_rn", F.row_number().over(newest_first))
         .withColumn(
